@@ -1,0 +1,78 @@
+import numpy as np
+from sklearn.decomposition import PCA
+
+
+def odxy(
+    X: np.ndarray,
+    y: np.ndarray,
+    k: int,
+    threshold: float = 1.5
+):
+    """
+    ODXY-based outlier detection method.
+
+    This function performs PCA on feature matrix X, constructs an ODXY distance
+    based on the ratio between normalized feature-space distance and target-space
+    deviation, and removes samples considered as outliers.
+
+    Parameters
+    ----------
+    X : np.ndarray, shape (n_samples, n_features)
+        Input feature matrix.
+    y : np.ndarray, shape (n_samples,)
+        Target vector.
+    k : int
+        Number of PCA components.
+    threshold : float, default=1.5
+        Threshold for outlier detection based on standardized ODXY distance.
+
+    Returns
+    -------
+    filtered_X : np.ndarray
+        Feature matrix after removing outliers.
+    filtered_y : np.ndarray
+        Target vector after removing outliers.
+    non_outlier_indices : np.ndarray
+        Indices of retained (non-outlier) samples.
+    outlier_indices : np.ndarray
+        Indices of detected outliers.
+    odxy_scores : np.ndarray
+        ODXY distance values for all samples.
+    """
+
+    # PCA projection
+    pca = PCA(n_components=k)
+    X_pca = pca.fit_transform(X)
+
+    # Mean distances
+    X_center = np.mean(X_pca, axis=0)
+    y_center = np.mean(y)
+
+    dx = np.linalg.norm(X_pca - X_center, axis=1)
+    dy = np.abs(y - y_center)
+
+    # Normalization
+    dx_norm = dx / (np.max(dx) + 1e-8)
+    dy_norm = dy / (np.max(dy) + 1e-8)
+
+    odxy_scores = dx_norm / (dy_norm + 1e-8)
+
+    # Robust statistics
+    median = np.median(odxy_scores)
+    std = np.std(odxy_scores) + 1e-8
+
+    z_scores = np.abs(odxy_scores - median) / std
+
+    non_outlier_indices = np.where(z_scores <= threshold)[0]
+    outlier_indices = np.where(z_scores > threshold)[0]
+
+    filtered_X = X[non_outlier_indices]
+    filtered_y = y[non_outlier_indices]
+
+    return (
+        filtered_X,
+        filtered_y,
+        non_outlier_indices,
+        outlier_indices,
+        odxy_scores
+    )
