@@ -1,0 +1,207 @@
+import numpy as np
+from sys import stdout
+from sklearn.cross_decomposition import PLSRegression
+from sklearn.model_selection import cross_val_predict
+from sklearn.metrics import mean_squared_error, r2_score
+
+def optimise_pls_cv(X, y, n_comp, plot_components=True):
+    """
+    Optimize the number of PLS latent variables using cross-validation.
+
+    Parameters
+    ----------
+    X : ndarray
+        Predictor matrix.
+    y : ndarray
+        Response vector.
+    n_comp : int
+        Maximum number of PLS components to test.
+    plot_components : bool
+        Reserved flag (not used, kept for compatibility).
+
+    Returns
+    -------
+    nLv : int
+        Optimal number of latent variables.
+    rmse_cv : float
+        Cross-validated RMSE using the optimal number of components.
+    """
+
+    mse = []
+    component = np.arange(1, n_comp)
+
+    for i in component:
+        pls = PLSRegression(n_components=i)
+
+        # Cross-validation prediction
+        y_cv = cross_val_predict(pls, X, y, cv=10)
+        mse.append(mean_squared_error(y, y_cv))
+
+        # Progress indicator
+        comp = 100 * (i + 1) / 40
+        stdout.write("\r%d%% completed" % comp)
+        stdout.flush()
+
+    stdout.write("\n")
+
+    # Index of minimum MSE
+    msemin = np.argmin(mse)
+    stdout.write("\n")
+
+    # Optimal number of latent variables
+    nLv = msemin + 1
+
+    # Fit optimal PLS model on full dataset
+    pls_opt = PLSRegression(n_components=msemin + 1)
+    pls_opt.fit(X, y)
+
+    # Cross-validation with optimal model
+    y_cv = cross_val_predict(pls_opt, X, y, cv=10)
+    rmse_cv = np.sqrt(mean_squared_error(y, y_cv))
+
+    return nLv, rmse_cv
+
+
+def simple_pls_predict(
+    X_train,
+    y_train,
+    X_test,
+    y_test,
+    nLv,
+    alpha=0.1,
+    n_boot=100,
+    random_state=503
+):
+    """
+    Train a PLSR model, evaluate calibration and prediction performance,
+    and estimate prediction uncertainty using bootstrap resampling.
+
+    Parameters
+    ----------
+    X_train, y_train : ndarray
+        Training data.
+    X_test, y_test : ndarray
+        Test data.
+    nLv : int
+        Number of PLS latent variables.
+    alpha : float
+        Significance level for prediction intervals.
+    n_boot : int
+        Number of bootstrap resamples.
+    random_state : int
+        Random seed.
+
+    Returns
+    -------
+    r2c : float
+        R² on training set.
+    rmsec : float
+        RMSE of calibration.
+    r2p : float
+        R² on test set.
+    rmsep : float
+        RMSE of prediction.
+    rpd : float
+        Residual predictive deviation.
+    cic : float
+        Coverage interval criterion.
+    ci_lower : ndarray
+        Lower bounds of prediction intervals.
+    ci_upper : ndarray
+        Upper bounds of prediction intervals.
+    """
+
+    rng = np.random.default_rng(random_state)
+
+    # Fit PLS model
+    pls = PLSRegression(n_components=nLv)
+    pls.fit(X_train, y_train)
+
+    # Predictions
+    y_train_pred = pls.predict(X_train)
+    y_test_pred = pls.predict(X_test)
+
+    # Calibration and prediction metrics
+    r2c = r2_score(y_train, y_train_pred)
+    rmsec = np.sqrt(mean_squared_error(y_train, y_train_pred))
+    r2p = r2_score(y_test, y_test_pred)
+    rmsep = np.sqrt(mean_squared_error(y_test, y_test_pred))
+    rpd = np.std(y_test, ddof=1) / rmsep
+
+    # Bootstrap resampling
+    n_train = len(y_train)
+    boot_preds = np.zeros((n_boot, len(y_test)))
+
+    for i in range(n_boot):
+        boot_idx = rng.choice(n_train, size=n_train, replace=True)
+        Xb, yb = X_train[boot_idx], y_train[boot_idx]
+
+        pls_b = PLSRegression(n_components=nLv)
+        pls_b.fit(Xb, yb)
+        boot_preds[i, :] = pls_b.predict(X_test).flatten()
+
+    # Prediction intervals
+    ci_lower = np.percentile(boot_preds, 100 * alpha / 2, axis=0)
+    ci_upper = np.percentile(boot_preds, 100 * (1 - alpha / 2), axis=0)
+
+    # Coverage Interval Criterion (CIC)
+    y_true = y_test.flatten()
+    within_ci = np.logical_and(y_true >= ci_lower, y_true <= ci_upper)
+    cic = np.mean(within_ci)
+
+    return r2c, rmsec, r2p, rmsep, rpd, cic, ci_lower, ci_upper
+
+
+def plsr(X_train, y_train, X_test, y_test, n_comp):
+    """
+    Complete PLSR workflow:
+    - Optimize number of latent variables
+    - Train final model
+    - Evaluate performance on training and test sets
+
+    Parameters
+    ----------
+    X_train, y_train : ndarray
+        Training data.
+    X_test, y_test : ndarray
+        Test data.
+    n_comp : int
+        Maximum number of PLS components to test.
+
+    Returns
+    -------
+    rmse_cv : float
+        Cross-validated RMSE.
+    r2c : float
+        Training R².
+    rmsec : float
+        Training RMSE.
+    r2p : float
+        Test R².
+    rmsep : float
+        Test RMSE.
+    rpd : float
+        Residual predictive deviation.
+    cic : float
+        Coverage interval criterion.
+    """
+
+    # Optimize latent variables using training set
+    nLv, rmse_cv = optimise_pls_cv(X_train, y_train, n_comp)
+
+    # Train and evaluate final model
+    r2c, rmsec, r2p, rmsep, rpd, cic, ci_lower, ci_upper = simple_pls_predict(
+        X_train, y_train, X_test, y_test, nLv
+    )
+
+    # Print summary
+    print("Optimal number of latent variables:", nLv)
+    print("Cross-validated RMSE: %.3f" % rmse_cv)
+    print("Training R2: %.3f" % r2c)
+    print("Training RMSEC: %.3f" % rmsec)
+    print("Test R2: %.3f" % r2p)
+    print("Test RMSEP: %.3f" % rmsep)
+    print("Test RPD: %.3f" % rpd)
+    print("Test CIC: %.3f" % cic)
+
+    return rmse_cv, r2c, rmsec, r2p, rmsep, rpd, cic
