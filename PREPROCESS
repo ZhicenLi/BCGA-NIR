@@ -1,0 +1,246 @@
+def snv(X: np.ndarray) -> np.ndarray:
+    """
+    Standard Normal Variate (SNV) transformation.
+
+    Parameters
+    ----------
+    X : np.ndarray, shape (n_samples, n_features)
+        Spectral data matrix.
+
+    Returns
+    -------
+    np.ndarray
+        SNV-transformed spectra.
+    """
+    mean = np.mean(X, axis=1, keepdims=True)
+    std = np.std(X, axis=1, keepdims=True) + 1e-8
+    return (X - mean) / std
+
+def sg(
+    X: np.ndarray,
+    window_length: int = 11,
+    polyorder: int = 2
+) -> np.ndarray:
+    """
+    Savitzky–Golay smoothing filter.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Spectral data.
+    window_length : int
+        Window length.
+    polyorder : int
+        Polynomial order.
+
+    Returns
+    -------
+    np.ndarray
+        Smoothed spectra.
+    """
+    return signal.savgol_filter(X, window_length, polyorder, axis=1)
+
+def 1st(X: np.ndarray) -> np.ndarray:
+    """
+    First-order spectral derivative.
+
+    Parameters
+    ----------
+    X : np.ndarray
+
+    Returns
+    -------
+    np.ndarray
+        First derivative spectra.
+    """
+    return np.diff(X, axis=1)
+
+def 2nd(X: np.ndarray) -> np.ndarray:
+    """
+    Second-order spectral derivative.
+
+    Parameters
+    ----------
+    X : np.ndarray
+
+    Returns
+    -------
+    np.ndarray
+        Second derivative spectra.
+    """
+    return np.diff(X, n=2, axis=1)
+
+def dt(X: np.ndarray) -> np.ndarray:
+    """
+    Detrending correction (DT).
+
+    Parameters
+    ----------
+    X : np.ndarray
+
+    Returns
+    -------
+    np.ndarray
+        Detrended spectra.
+    """
+    n_features = X.shape[1]
+    x = np.arange(n_features).reshape(-1, 1)
+
+    X_out = np.empty_like(X)
+    lr = LinearRegression()
+
+    for i in range(X.shape[0]):
+        lr.fit(x, X[i])
+        trend = lr.predict(x)
+        X_out[i] = X[i] - trend
+
+    return X_out
+
+def msc(X: np.ndarray) -> np.ndarray:
+    """
+    Multiplicative Scatter Correction (MSC).
+
+    Parameters
+    ----------
+    X : np.ndarray
+
+    Returns
+    -------
+    np.ndarray
+        MSC-corrected spectra.
+    """
+    mean_spectrum = np.mean(X, axis=0)
+    X_msc = np.empty_like(X)
+
+    lr = LinearRegression()
+
+    for i in range(X.shape[0]):
+        lr.fit(mean_spectrum.reshape(-1, 1), X[i])
+        k = lr.coef_[0]
+        b = lr.intercept_
+        X_msc[i] = (X[i] - b) / (k + 1e-8)
+
+    return X_msc
+
+def wave(
+    X: np.ndarray,
+    wavelet: str = "db8",
+    threshold_ratio: float = 0.04
+) -> np.ndarray:
+    """
+    Wavelet-based denoising.
+
+    Parameters
+    ----------
+    X : np.ndarray
+    wavelet : str
+        Wavelet type.
+    threshold_ratio : float
+        Threshold scaling factor.
+
+    Returns
+    -------
+    np.ndarray
+        Denoised spectra.
+    """
+    w = pywt.Wavelet(wavelet)
+    X_out = []
+
+    for row in X:
+        max_level = pywt.dwt_max_level(len(row), w.dec_len)
+        coeffs = pywt.wavedec(row, wavelet, level=max_level)
+
+        for i in range(1, len(coeffs)):
+            thresh = threshold_ratio * np.max(np.abs(coeffs[i]))
+            coeffs[i] = pywt.threshold(coeffs[i], thresh)
+
+        X_out.append(pywt.waverec(coeffs, wavelet))
+
+    return np.vstack(X_out)
+
+def bc(
+    X: np.ndarray,
+    x_axis: np.ndarray,
+    poly_order: int = 2
+) -> np.ndarray:
+    """
+    Polynomial baseline correction.
+
+    Parameters
+    ----------
+    X : np.ndarray
+        Spectral data.
+    x_axis : np.ndarray
+        Wavelength or wavenumber axis.
+    poly_order : int
+        Polynomial order.
+
+    Returns
+    -------
+    np.ndarray
+        Baseline-corrected spectra.
+    """
+    X_out = np.empty_like(X)
+
+    for i in range(X.shape[0]):
+        y = X[i]
+        peaks, _ = find_peaks(y, prominence=0.05)
+        widths = peak_widths(y, peaks, rel_height=0.5)
+
+        mask = np.ones_like(y, dtype=bool)
+        for p, w in zip(peaks, widths[0]):
+            l = max(int(p - w), 0)
+            r = min(int(p + w), len(y))
+            mask[l:r] = False
+
+        if np.sum(mask) < poly_order + 1:def minmax_norm(X: np.ndarray) -> np.ndarray:
+    """
+    Min–Max normalization.
+
+    Parameters
+    ----------
+    X : np.ndarray
+
+    Returns
+    -------
+    np.ndarray
+        Normalized spectra.
+    """
+    min_val = np.min(X, axis=1, keepdims=True)
+    max_val = np.max(X, axis=1, keepdims=True)
+
+    denom = max_val - min_val
+    denom[denom == 0] = 1.0
+
+    return (X - min_val) / denom
+
+            baseline = np.zeros_like(y)
+        else:
+            coef = np.polyfit(x_axis[mask], y[mask], poly_order)
+            baseline = np.polyval(coef, x_axis)
+
+        X_out[i] = y - baseline
+
+    return X_out
+
+def norm(X: np.ndarray) -> np.ndarray:
+    """
+    Min–Max normalization.
+
+    Parameters
+    ----------
+    X : np.ndarray
+
+    Returns
+    -------
+    np.ndarray
+        Normalized spectra.
+    """
+    min_val = np.min(X, axis=1, keepdims=True)
+    max_val = np.max(X, axis=1, keepdims=True)
+
+    denom = max_val - min_val
+    denom[denom == 0] = 1.0
+
+    return (X - min_val) / denom
+
